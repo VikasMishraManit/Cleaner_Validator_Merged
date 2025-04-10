@@ -5,30 +5,23 @@ import io
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-
 st.title("Cognos vs Power BI Column Checklist")
 
+# --- File Uploads ---
 st.subheader("Step 1: Upload Cognos File")
 cognos_file = st.file_uploader("Upload Cognos Excel File", type=["xlsx"], key="cognos")
 
 st.subheader("Step 2: Upload Power BI File")
 pbi_file = st.file_uploader("Upload Power BI Excel File", type=["xlsx"], key="pbi")
 
-model_name = st.text_input("Enter Model Name")
-report_name = st.text_input("Enter Report Name")
+# --- Text Inputs ---
+model_name = st.text_input("Enter Model Name", key="model_name_input")
+report_name = st.text_input("Enter Report Name", key="report_name_input")
 
+# --- Process after both files are uploaded ---
 if cognos_file is not None and pbi_file is not None:
     cognos_df = pd.read_excel(cognos_file)
     pbi_df = pd.read_excel(pbi_file)
-
-
-model_name = st.text_input("Enter Model Name")
-report_name = st.text_input("Enter Report Name")
-
-if uploaded_file is not None:
-    xls = pd.ExcelFile(uploaded_file)
-    cognos_df = pd.read_excel(xls, 'Cognos')
-    pbi_df = pd.read_excel(xls, 'PBI')
 
     cognos_columns = list(cognos_df.columns)
     pbi_columns = list(pbi_df.columns)
@@ -51,6 +44,7 @@ if uploaded_file is not None:
     cognos_df = cognos_df.apply(lambda x: x.str.upper().str.strip() if x.dtype == "object" else x)
     pbi_df = pbi_df.apply(lambda x: x.str.upper().str.strip() if x.dtype == "object" else x)
 
+    # --- Core Functions ---
     def generate_validation_report(cognos_df, pbi_df):
         dims = [col for col in cognos_df.columns if col in pbi_df.columns and 
                 (cognos_df[col].dtype == 'object' or '_id' in col.lower() or '_key' in col.lower() or
