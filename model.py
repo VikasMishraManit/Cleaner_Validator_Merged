@@ -8,7 +8,19 @@ st.set_page_config(layout="wide")
 
 st.title("Cognos vs Power BI Column Checklist")
 
-uploaded_file = st.file_uploader("Upload Excel file with 'Cognos' and 'PBI' sheets", type=["xlsx"])
+st.subheader("Step 1: Upload Cognos File")
+cognos_file = st.file_uploader("Upload Cognos Excel File", type=["xlsx"], key="cognos")
+
+st.subheader("Step 2: Upload Power BI File")
+pbi_file = st.file_uploader("Upload Power BI Excel File", type=["xlsx"], key="pbi")
+
+model_name = st.text_input("Enter Model Name")
+report_name = st.text_input("Enter Report Name")
+
+if cognos_file is not None and pbi_file is not None:
+    cognos_df = pd.read_excel(cognos_file)
+    pbi_df = pd.read_excel(pbi_file)
+
 
 model_name = st.text_input("Enter Model Name")
 report_name = st.text_input("Enter Report Name")
