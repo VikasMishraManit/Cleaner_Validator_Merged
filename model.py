@@ -5,21 +5,16 @@ import io
 from datetime import datetime
 
 st.set_page_config(layout="wide")
+
 st.title("Cognos vs Power BI Column Checklist")
 
-# --- File Uploads ---
-st.subheader("Step 1: Upload Cognos File")
 cognos_file = st.file_uploader("Upload Cognos Excel File", type=["xlsx"], key="cognos")
-
-st.subheader("Step 2: Upload Power BI File")
 pbi_file = st.file_uploader("Upload Power BI Excel File", type=["xlsx"], key="pbi")
 
-# --- Text Inputs ---
-model_name = st.text_input("Enter Model Name", key="model_name_input")
-report_name = st.text_input("Enter Report Name", key="report_name_input")
+model_name = st.text_input("Enter Model Name")
+report_name = st.text_input("Enter Report Name")
 
-# --- Process after both files are uploaded ---
-if cognos_file is not None and pbi_file is not None:
+if cognos_file and pbi_file:
     cognos_df = pd.read_excel(cognos_file)
     pbi_df = pd.read_excel(pbi_file)
 
@@ -44,11 +39,14 @@ if cognos_file is not None and pbi_file is not None:
     cognos_df = cognos_df.apply(lambda x: x.str.upper().str.strip() if x.dtype == "object" else x)
     pbi_df = pbi_df.apply(lambda x: x.str.upper().str.strip() if x.dtype == "object" else x)
 
-    # --- Core Functions ---
     def generate_validation_report(cognos_df, pbi_df):
         dims = [col for col in cognos_df.columns if col in pbi_df.columns and 
                 (cognos_df[col].dtype == 'object' or '_id' in col.lower() or '_key' in col.lower() or
                  '_ID' in col or '_KEY' in col)]
+
+        if not dims:
+            st.error("⚠️ No common dimension columns found for grouping. Please ensure files share common ID or string columns.")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         cognos_df[dims] = cognos_df[dims].fillna('NAN')
         pbi_df[dims] = pbi_df[dims].fillna('NAN')
@@ -135,30 +133,32 @@ if cognos_file is not None and pbi_file is not None:
     checklist_df = pd.DataFrame(checklist_data)
 
     validation_report, cognos_agg, pbi_agg = generate_validation_report(cognos_df, pbi_df)
-    column_checklist_df = column_checklist(cognos_df, pbi_df)
-    diff_checker_df = generate_diff_checker(validation_report)
 
-    st.markdown("---")
-    st.subheader("Validation Report Preview")
-    st.dataframe(validation_report)
+    if not validation_report.empty:
+        column_checklist_df = column_checklist(cognos_df, pbi_df)
+        diff_checker_df = generate_diff_checker(validation_report)
 
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        checklist_df.to_excel(writer, sheet_name='Checklist', index=False)
-        cognos_agg.to_excel(writer, sheet_name='Cognos', index=False)
-        pbi_agg.to_excel(writer, sheet_name='PBI', index=False)
-        validation_report.to_excel(writer, sheet_name='Validation_Report', index=False)
-        column_checklist_df.to_excel(writer, sheet_name='Column Checklist', index=False)
-        diff_checker_df.to_excel(writer, sheet_name='Diff Checker', index=False)
+        st.markdown("---")
+        st.subheader("Validation Report Preview")
+        st.dataframe(validation_report)
 
-    output.seek(0)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            checklist_df.to_excel(writer, sheet_name='Checklist', index=False)
+            cognos_agg.to_excel(writer, sheet_name='Cognos', index=False)
+            pbi_agg.to_excel(writer, sheet_name='PBI', index=False)
+            validation_report.to_excel(writer, sheet_name='Validation_Report', index=False)
+            column_checklist_df.to_excel(writer, sheet_name='Column Checklist', index=False)
+            diff_checker_df.to_excel(writer, sheet_name='Diff Checker', index=False)
 
-    today_date = datetime.today().strftime('%Y-%m-%d')
-    dynamic_filename = f"{model_name}_{report_name}_ValidationReport_{today_date}.xlsx" if model_name and report_name else f"ValidationReport_{today_date}.xlsx"
+        output.seek(0)
 
-    st.download_button(
-        label="Download Excel Report",
-        data=output,
-        file_name=dynamic_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        today_date = datetime.today().strftime('%Y-%m-%d')
+        dynamic_filename = f"{model_name}_{report_name}_ValidationReport_{today_date}.xlsx" if model_name and report_name else f"ValidationReport_{today_date}.xlsx"
+
+        st.download_button(
+            label="Download Excel Report",
+            data=output,
+            file_name=dynamic_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
