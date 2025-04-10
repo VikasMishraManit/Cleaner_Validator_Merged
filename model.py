@@ -2,16 +2,22 @@ import streamlit as st
 import pandas as pd
 import io
 import numpy as np
+import tempfile
+import os
 from datetime import datetime
 
-# ------------------ ADDED: Numeric Cleaner Function ------------------
+# Function to clean numeric text values
 def strip_leading_zeros(val):
     if isinstance(val, str) and val.strip().lstrip("0").isdigit():
         return int(val.lstrip("0") or "0")
     return val
-# --------------------------------------------------------------------
 
-# Define the checklist data as a DataFrame
+def clean_excel_sheets(cognos_df, pbi_df):
+    cognos_cleaned = cognos_df.applymap(strip_leading_zeros)
+    pbi_cleaned = pbi_df.applymap(strip_leading_zeros)
+    return cognos_cleaned, pbi_cleaned
+
+# Checklist template
 checklist_data = {
     "S.No": range(1, 18),
     "Checklist": [
@@ -38,10 +44,17 @@ checklist_data = {
 }
 checklist_df = pd.DataFrame(checklist_data)
 
+# Generate validation report
 def generate_validation_report(cognos_df, pbi_df):
     dims = [col for col in cognos_df.columns if col in pbi_df.columns and 
             (cognos_df[col].dtype == 'object' or '_id' in col.lower() or '_key' in col.lower() or
              '_ID' in col or '_KEY' in col)]
+
+    # Safe fallback if dims is empty
+    if not dims:
+        dims = [col for col in cognos_df.columns if col in pbi_df.columns and not np.issubdtype(cognos_df[col].dtype, np.number)]
+        if not dims:
+            raise ValueError("No common non-numeric columns (dimensions) found between Cognos and PBI.")
 
     cognos_df[dims] = cognos_df[dims].fillna('NAN')
     pbi_df[dims] = pbi_df[dims].fillna('NAN')
@@ -56,9 +69,6 @@ def generate_validation_report(cognos_df, pbi_df):
     cognos_agg['unique_key'] = cognos_agg[dims].astype(str).agg('-'.join, axis=1).str.upper()
     pbi_agg['unique_key'] = pbi_agg[dims].astype(str).agg('-'.join, axis=1).str.upper()
 
-    cognos_agg = cognos_agg[['unique_key'] + [col for col in cognos_agg.columns if col != 'unique_key']]
-    pbi_agg = pbi_agg[['unique_key'] + [col for col in pbi_agg.columns if col != 'unique_key']]
-
     validation_report = pd.DataFrame({'unique_key': list(set(cognos_agg['unique_key']) | set(pbi_agg['unique_key']))})
 
     for dim in dims:
@@ -67,14 +77,12 @@ def generate_validation_report(cognos_df, pbi_df):
 
     validation_report['presence'] = validation_report['unique_key'].apply(
         lambda key: 'Present in Both' if key in cognos_agg['unique_key'].values and key in pbi_agg['unique_key'].values
-        else ('Present in Cognos' if key in cognos_agg['unique_key'].values
-              else 'Present in PBI')
+        else ('Present in Cognos' if key in cognos_agg['unique_key'].values else 'Present in PBI')
     )
 
     for measure in all_measures:
         validation_report[f'{measure}_Cognos'] = validation_report['unique_key'].map(dict(zip(cognos_agg['unique_key'], cognos_agg[measure])))
         validation_report[f'{measure}_PBI'] = validation_report['unique_key'].map(dict(zip(pbi_agg['unique_key'], pbi_agg[measure])))
-
         validation_report[f'{measure}_Diff'] = validation_report[f'{measure}_PBI'].fillna(0) - validation_report[f'{measure}_Cognos'].fillna(0)
 
     column_order = ['unique_key'] + dims + ['presence'] + \
@@ -84,6 +92,7 @@ def generate_validation_report(cognos_df, pbi_df):
 
     return validation_report, cognos_agg, pbi_agg
 
+# Compare column headers
 def column_checklist(cognos_df, pbi_df):
     cognos_columns = cognos_df.columns.tolist()
     pbi_columns = pbi_df.columns.tolist()
@@ -94,9 +103,9 @@ def column_checklist(cognos_df, pbi_df):
     })
 
     checklist_df['Match'] = checklist_df.apply(lambda row: row['Cognos Columns'] == row['PowerBI Columns'], axis=1)
-    
     return checklist_df
 
+# Generate diff checker
 def generate_diff_checker(validation_report):
     diff_columns = [col for col in validation_report.columns if col.endswith('_Diff')]
 
@@ -110,42 +119,41 @@ def generate_diff_checker(validation_report):
         'Sum of Difference': 'Yes' if all(validation_report['presence'] == 'Present in Both') else 'No'
     }
     diff_checker = pd.concat([diff_checker, pd.DataFrame([presence_summary])], ignore_index=True)
-
     return diff_checker
 
-def check_columns_only(cognos_df, pbi_df):
-    return cognos_df.empty or pbi_df.empty
-
+# Streamlit UI
 def main():
-    st.title("Validation Report Generator")
+    st.set_page_config(page_title="Validator + Excel Cleaner", layout="wide")
+    st.title("📊 Combined PowerBI vs Cognos Validator + Excel Cleaner")
 
     st.markdown("""
-    **Important Assumptions:**
-    1. Upload the Excel file with two sheets: "Cognos" and "PBI".
-    2. Make sure the column names are similar in both sheets.
-    3. If there are ID/Key/Code columns, make sure the ID or Key columns contains "_ID" or "_KEY" (case insensitive)
+    **Steps to Use:**
+    1. Upload a single `.xlsx` file with **two sheets**: `Cognos` and `PBI`.
+    2. This tool will auto-clean numeric values stored as text.
+    3. Select whether you're validating data or only column headers.
     """)
 
     model_name = st.text_input("Enter the model name:")
     report_name = st.text_input("Enter the report name:")
+    uploaded_file = st.file_uploader("Upload Excel file with Cognos & PBI sheets", type="xlsx")
 
-    uploaded_file = st.file_uploader("Upload Excel file", type="xlsx")
-
-    if uploaded_file is not None:
+    if uploaded_file:
         try:
             xls = pd.ExcelFile(uploaded_file)
-            cognos_df = pd.read_excel(xls, 'Cognos')
-            pbi_df = pd.read_excel(xls, 'PBI')
+            cognos_df = pd.read_excel(xls, sheet_name='Cognos')
+            pbi_df = pd.read_excel(xls, sheet_name='PBI')
 
-            # ------------------ CLEAN NUMERIC-LOOKING TEXT ------------------
-            cognos_df = cognos_df.applymap(strip_leading_zeros)
-            pbi_df = pbi_df.applymap(strip_leading_zeros)
-            # ---------------------------------------------------------------
+            # Clean numbers stored as text
+            cognos_df, pbi_df = clean_excel_sheets(cognos_df, pbi_df)
 
+            # Uppercase and strip strings
             cognos_df = cognos_df.apply(lambda x: x.str.upper().str.strip() if x.dtype == "object" else x)
             pbi_df = pbi_df.apply(lambda x: x.str.upper().str.strip() if x.dtype == "object" else x)
 
             option = st.radio("Select Option", ["Data Present", "Only Column Names Present"])
+
+            output = io.BytesIO()
+            today_date = datetime.today().strftime('%Y-%m-%d')
 
             if option == "Only Column Names Present":
                 column_checklist_df = column_checklist(cognos_df, pbi_df)
@@ -153,29 +161,15 @@ def main():
                 st.subheader("Column Checklist Preview")
                 st.dataframe(column_checklist_df)
 
-                output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     checklist_df.to_excel(writer, sheet_name='Checklist', index=False)
                     cognos_df.to_excel(writer, sheet_name='Cognos', index=False)
                     pbi_df.to_excel(writer, sheet_name='PBI', index=False)
                     column_checklist_df.to_excel(writer, sheet_name='Column Checklist', index=False)
 
-                output.seek(0)
+                dynamic_filename = f"{model_name}_{report_name}_ColumnCheck_{today_date}.xlsx" if model_name else f"ColumnCheck_{today_date}.xlsx"
 
-                today_date = datetime.today().strftime('%Y-%m-%d')
-                if model_name and report_name:
-                    dynamic_filename = f"{model_name}_{report_name}_ColumnCheck_Report_{today_date}.xlsx"
-                else:
-                    dynamic_filename = f"ColumnCheck_Report_{today_date}.xlsx"
-
-                st.download_button(
-                    label="Download Column Check Excel Report",
-                    data=output,
-                    file_name=dynamic_filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
-            elif option == "Data Present":
+            else:
                 validation_report, cognos_agg, pbi_agg = generate_validation_report(cognos_df, pbi_df)
                 column_checklist_df = column_checklist(cognos_df, pbi_df)
                 diff_checker_df = generate_diff_checker(validation_report)
@@ -183,7 +177,6 @@ def main():
                 st.subheader("Validation Report Preview")
                 st.dataframe(validation_report)
 
-                output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     checklist_df.to_excel(writer, sheet_name='Checklist', index=False)
                     cognos_agg.to_excel(writer, sheet_name='Cognos', index=False)
@@ -192,23 +185,19 @@ def main():
                     column_checklist_df.to_excel(writer, sheet_name='Column Checklist', index=False)
                     diff_checker_df.to_excel(writer, sheet_name='Diff Checker', index=False)
 
-                output.seek(0)
+                dynamic_filename = f"{model_name}_{report_name}_Validation_{today_date}.xlsx" if model_name else f"Validation_{today_date}.xlsx"
 
-                today_date = datetime.today().strftime('%Y-%m-%d')
-                if model_name and report_name:
-                    dynamic_filename = f"{model_name}_{report_name}_ValidationReport_{today_date}.xlsx"
-                else:
-                    dynamic_filename = f"ValidationReport_{today_date}.xlsx"
+            output.seek(0)
 
-                st.download_button(
-                    label="Download Excel Report",
-                    data=output,
-                    file_name=dynamic_filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.download_button(
+                label="⬇️ Download Excel Report",
+                data=output,
+                file_name=dynamic_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
         except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
+            st.error(f"❌ An error occurred: {str(e)}")
 
 if __name__ == "__main__":
     main()
