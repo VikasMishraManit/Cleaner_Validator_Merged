@@ -1,4 +1,6 @@
 streamlit
 pandas
-XlsxWriter
-openpyxl==3.1.5
+openpyxl
+numpy
+fuzzywuzzy
+python-Levenshtein
